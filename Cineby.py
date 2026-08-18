@@ -1,14 +1,15 @@
 """
-MegaSource Scraper for Cineby (Patched)
+MegaSource Diagnostic Scraper for Cineby
 """
 import base64
 import json
 import urllib.parse
 import urllib.request
+import traceback
 
 TITLE = "Cineby"
-VERSION = "1.0.1"
-DESCRIPTION = "Multi-server movie and TV streaming from Videasy network"
+VERSION = "1.0.2-DEBUG"
+DESCRIPTION = "Diagnostic Scraper for Cineby Videasy network"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 HEADERS = {
     "User-Agent": USER_AGENT,
@@ -20,7 +21,63 @@ DOMAINS_URL = "https://raw.githubusercontent.com/sapariyaneel/nuvio-plugin/refs/
 FALLBACK_API_HOST = "https://api.speedracelight.com"
 
 
-# --- Cineby Decryption Cipher (Javascript Sparse Array Matched) ---
+# --- HTTP & TMDB Utilities ---
+
+def _request(url, headers=None):
+    req_headers = {"User-Agent": USER_AGENT}
+    if headers:
+        req_headers.update(headers)
+    req = urllib.request.Request(url, headers=req_headers)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status, resp.read().decode('utf-8', errors='replace')
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode('utf-8', errors='replace')
+    except Exception as e:
+        return 0, str(e)
+
+def get_api_host():
+    status, raw_domains = _request(DOMAINS_URL)
+    if status == 200 and raw_domains:
+        try:
+            domains = json.loads(raw_domains)
+            host = domains.get("speedracelight") or FALLBACK_API_HOST
+            return host.rstrip('/')
+        except Exception:
+            pass
+    return FALLBACK_API_HOST
+
+def get_tmdb_meta(media_id, media_type):
+    tmdb_id = media_id
+    if str(media_id).startswith("tt"):
+        find_url = f"https://api.themoviedb.org/3/find/{media_id}?api_key={TMDB_API_KEY}&external_source=imdb_id"
+        st, res = _request(find_url)
+        if st == 200 and res:
+            data = json.loads(res)
+            results = data.get("tv_results") if media_type == "series" else data.get("movie_results")
+            if results:
+                tmdb_id = results[0].get("id")
+            else:
+                return None
+        else:
+            return None
+
+    endpoint = "tv" if media_type == "series" else "movie"
+    details_url = f"https://api.themoviedb.org/3/{endpoint}/{tmdb_id}?api_key={TMDB_API_KEY}&append_to_response=external_ids"
+    st, res = _request(details_url)
+    if st != 200 or not res:
+        return None
+    data = json.loads(res)
+    
+    title = data.get("name") if media_type == "series" else data.get("title")
+    rel_date = data.get("first_air_date") if media_type == "series" else data.get("release_date")
+    year = rel_date[:4] if rel_date else ""
+    ext_ids = data.get("external_ids", {})
+    imdb_id = ext_ids.get("imdb_id") or data.get("imdb_id", "")
+    
+    return {"tmdb_id": tmdb_id, "title": title, "year": year, "imdb_id": imdb_id}
+
+# --- Cineby Decryption Cipher ---
 
 def _fmix32(h):
     h = h & 0xFFFFFFFF
@@ -64,21 +121,19 @@ def _next_keystream_word(state, counter):
     acc = state["acc"]
     idx = acc % 61
     
-    # Emulating JS "idx in array" behavior 
     is_defined = slots[idx] is not None
     slot_val = slots[idx] if is_defined else 0
     
     imul_val = (0x9E3779B9 * (counter + 1)) & 0xFFFFFFFF
     mixed = (slot_val ^ imul_val) & 0xFFFFFFFF
     
-    # Applying the JS bitwise mask based on whether the array index existed
     if is_defined:
         combined = (acc | mixed) & 0xFFFFFFFF
     else:
         combined = (acc ^ mixed) & 0xFFFFFFFF
         
     r1 = idx & 0x1F
-    r2 = (idx * 7) & 0x1F  # Replicating JS Math.imul(idx, 7)
+    r2 = (idx * 7) & 0x1F
     
     rot1 = _rotl32((combined + acc) & 0xFFFFFFFF, r1)
     rot2 = _rotl32(acc, r2)
@@ -128,137 +183,99 @@ def decrypt_sources_payload(enc_str, seed_str, tmdb_id):
     return decrypted[4:].decode('utf-8', errors='replace')
 
 
-# --- HTTP & TMDB Utilities ---
-
-def _request(url, headers=None):
-    req_headers = {"User-Agent": USER_AGENT}
-    if headers:
-        req_headers.update(headers)
-    req = urllib.request.Request(url, headers=req_headers)
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            if resp.status == 200:
-                return resp.read().decode('utf-8', errors='replace')
-    except Exception:
-        pass
-    return None
-
-def get_api_host():
-    raw_domains = _request(DOMAINS_URL)
-    if raw_domains:
-        try:
-            domains = json.loads(raw_domains)
-            host = domains.get("speedracelight") or FALLBACK_API_HOST
-            return host.rstrip('/')
-        except Exception:
-            pass
-    return FALLBACK_API_HOST
-
-def get_tmdb_meta(media_id, media_type):
-    tmdb_id = media_id
-    if str(media_id).startswith("tt"):
-        find_url = f"https://api.themoviedb.org/3/find/{media_id}?api_key={TMDB_API_KEY}&external_source=imdb_id"
-        res = _request(find_url)
-        if res:
-            data = json.loads(res)
-            results = data.get("tv_results") if media_type == "series" else data.get("movie_results")
-            if results:
-                tmdb_id = results[0].get("id")
-            else:
-                return None
-
-    endpoint = "tv" if media_type == "series" else "movie"
-    details_url = f"https://api.themoviedb.org/3/{endpoint}/{tmdb_id}?api_key={TMDB_API_KEY}&append_to_response=external_ids"
-    res = _request(details_url)
-    if not res:
-        return None
-    data = json.loads(res)
-    
-    title = data.get("name") if media_type == "series" else data.get("title")
-    rel_date = data.get("first_air_date") if media_type == "series" else data.get("release_date")
-    year = rel_date[:4] if rel_date else ""
-    ext_ids = data.get("external_ids", {})
-    imdb_id = ext_ids.get("imdb_id") or data.get("imdb_id", "")
-    
-    return {"tmdb_id": tmdb_id, "title": title, "year": year, "imdb_id": imdb_id}
-
-
 # --- Main Scraper Entry Point ---
 
+def return_error(msg):
+    return [{
+        "name": "CINEBY ERROR",
+        "title": str(msg),
+        "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    }]
+
 def get_streams(media_type, media_id, config=None):
-    imdb_id = media_id
-    season = episode = None
-    if ":" in media_id:
-        parts = media_id.split(":", 2)
-        imdb_id = parts[0]
-        if len(parts) == 3:
-            season = parts[1]
-            episode = parts[2]
+    try:
+        imdb_id = media_id
+        season = episode = None
+        if ":" in media_id:
+            parts = media_id.split(":", 2)
+            imdb_id = parts[0]
+            if len(parts) == 3:
+                season = parts[1]
+                episode = parts[2]
+                
+        meta = get_tmdb_meta(imdb_id, media_type)
+        if not meta or not meta.get("tmdb_id"):
+            return return_error(f"Failed to fetch TMDB Meta for {imdb_id}")
             
-    meta = get_tmdb_meta(imdb_id, media_type)
-    if not meta or not meta.get("tmdb_id"):
-        return []
+        tmdb_id = meta["tmdb_id"]
+        api_host = get_api_host()
         
-    tmdb_id = meta["tmdb_id"]
-    api_host = get_api_host()
-    
-    # 1. Fetch encryption seed
-    seed_res = _request(f"{api_host}/seed?mediaId={tmdb_id}", headers=HEADERS)
-    if not seed_res:
-        return []
-    try:
-        seed = json.loads(seed_res).get("seed")
-    except Exception:
-        return []
+        # 1. Fetch encryption seed
+        seed_status, seed_res = _request(f"{api_host}/seed?mediaId={tmdb_id}", headers=HEADERS)
+        if seed_status != 200:
+            return return_error(f"Seed API Error {seed_status} at {api_host}")
+            
+        try:
+            seed = json.loads(seed_res).get("seed")
+        except Exception:
+            return return_error(f"JSON Parse Error on Seed: {seed_res[:50]}")
+            
+        if not seed:
+            return return_error("Seed key was empty.")
+            
+        # 2. Fetch encrypted sources payload
+        params = urllib.parse.urlencode({
+            "title": meta.get("title", ""),
+            "mediaType": "tv" if media_type == "series" else "movie",
+            "year": meta.get("year", ""),
+            "episodeId": str(episode if media_type == "series" and episode else 1),
+            "seasonId": str(season if media_type == "series" and season else 1),
+            "tmdbId": str(tmdb_id),
+            "imdbId": meta.get("imdb_id", ""),
+            "enc": "2",
+            "seed": seed
+        })
         
-    if not seed:
-        return []
+        sources_url = f"{api_host}/sources?{params}"
+        sources_status, sources_enc = _request(sources_url, headers=HEADERS)
         
-    # 2. Fetch encrypted sources payload
-    params = urllib.parse.urlencode({
-        "title": meta.get("title", ""),
-        "mediaType": "tv" if media_type == "series" else "movie",
-        "year": meta.get("year", ""),
-        "episodeId": str(episode if media_type == "series" and episode else 1),
-        "seasonId": str(season if media_type == "series" and season else 1),
-        "tmdbId": str(tmdb_id),
-        "imdbId": meta.get("imdb_id", ""),
-        "enc": "2",
-        "seed": seed
-    })
-    
-    sources_enc = _request(f"{api_host}/sources?{params}", headers=HEADERS)
-    if not sources_enc:
-        return []
-        
-    # 3. Decrypt payload
-    try:
-        decrypted_json_str = decrypt_sources_payload(sources_enc.strip(), seed, tmdb_id)
-        payload = json.loads(decrypted_json_str)
-    except Exception:
-        return []
-        
-    sources = payload.get("sources", [])
-    results = []
-    
-    for src in sources:
-        stream_url = src.get("url")
-        if stream_url:
-            quality = src.get("quality", "HD")
-            results.append({
-                "name": TITLE,
-                "title": f"Cineby | {quality}",
-                "url": stream_url,
-                "behaviorHints": {
-                    "notMyMetadata": True,
-                    "proxyHeaders": {
-                        "request": {
-                            "User-Agent": USER_AGENT,
-                            "Referer": "https://www.cineby.at/",
-                            "Origin": "https://www.cineby.at/"
+        if sources_status != 200:
+            return return_error(f"Sources API Error {sources_status}. URL: {sources_url[:60]}...")
+            
+        # 3. Decrypt payload
+        try:
+            decrypted_json_str = decrypt_sources_payload(sources_enc.strip(), seed, tmdb_id)
+            payload = json.loads(decrypted_json_str)
+        except Exception as decrypt_err:
+            return return_error(f"Decryption Crash: {decrypt_err}")
+            
+        sources = payload.get("sources", [])
+        if not sources:
+            return return_error("Decrypted successfully, but no streams were inside the payload.")
+            
+        results = []
+        for src in sources:
+            stream_url = src.get("url")
+            if stream_url:
+                quality = src.get("quality", "HD")
+                results.append({
+                    "name": TITLE,
+                    "title": f"Cineby | {quality}",
+                    "url": stream_url,
+                    "behaviorHints": {
+                        "notMyMetadata": True,
+                        "proxyHeaders": {
+                            "request": {
+                                "User-Agent": USER_AGENT,
+                                "Referer": "https://www.cineby.at/",
+                                "Origin": "https://www.cineby.at/"
+                            }
                         }
                     }
-                }
-            })
-            
-    return results
+                })
+                
+        return results
+
+    except Exception as e:
+        return return_error(f"Fatal Crash: {str(e)}\n{traceback.format_exc()[:100]}")
+
