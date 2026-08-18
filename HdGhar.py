@@ -1,5 +1,5 @@
 """
-MegaSource Scraper for HDGharTV
+MegaSource Scraper for HDGharTV (v2 - Direct API)
 """
 import json
 import urllib.parse
@@ -7,18 +7,13 @@ import urllib.request
 import traceback
 
 TITLE = "HDGharTV"
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 DESCRIPTION = "HDGhar TV movies and series scraper"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 TMDB_API_KEY = "1865f43a0549ca50d341dd9ab8b29f49"
 
-# HDGharTV occasionally rotates its TLD, so we check multiple
-DOMAINS = [
-    "https://hdghartv.com", 
-    "https://hdghartv.cc", 
-    "https://hdghartv.top", 
-    "https://hdghartv.in"
-]
+# Exact decoded domain from the Nuvio plugin
+API_HOST = "https://hdghartv.cc"
 
 # --- Error Handling ---
 
@@ -27,7 +22,6 @@ def return_error(msg):
     return [{
         "name": "HDGHAR ERROR",
         "title": str(msg),
-        # Dummy video so Stremio/MegaSource doesn't reject the stream format
         "url": "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
         "behaviorHints": {
             "notMyMetadata": True,
@@ -43,7 +37,7 @@ def _request(url, headers=None):
         req_headers.update(headers)
     req = urllib.request.Request(url, headers=req_headers)
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=12) as resp:
             return resp.status, resp.read().decode('utf-8', errors='replace')
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode('utf-8', errors='replace')
@@ -95,29 +89,23 @@ def get_streams(media_type, media_id, config=None):
                 
         meta = get_tmdb_meta(imdb_id, media_type)
         if not meta or not meta.get("tmdb_id"):
-            return return_error(f"Failed to fetch TMDB Meta for {imdb_id}")
+            return return_error(f"Failed to fetch TMDB Metadata for {imdb_id}")
             
         tmdb_id = meta["tmdb_id"]
         title = meta["title"]
         
-        # Discover the currently active domain
-        api_host = None
-        for d in DOMAINS:
-            st, _ = _request(f"{d}/api/search?q=test&type=all&page=1")
-            if st == 200:
-                api_host = d
-                break
-                
-        if not api_host:
-            return return_error("All known HDGharTV domains failed to respond.")
-            
         # 1. Search the HDGhar Database
-        search_url = f"{api_host}/api/search?q={urllib.parse.quote(title)}&type=all&page=1"
-        st, res = _request(search_url, headers={"Referer": f"{api_host}/"})
+        search_url = f"{API_HOST}/api/search?q={urllib.parse.quote(title)}&type=all&page=1"
+        st, res = _request(search_url, headers={"Referer": f"{API_HOST}/"})
+        
         if st != 200 or not res:
-            return return_error(f"Search API Error {st}")
+            return return_error(f"Search API Error {st} | Domain might be blocked or down.")
             
-        data = json.loads(res)
+        try:
+            data = json.loads(res)
+        except Exception:
+            return return_error("Failed to parse JSON from HDGhar search. Cloudflare block likely.")
+            
         movies = data.get("movies", [])
         series = data.get("series", [])
         all_items = movies + series
@@ -129,18 +117,19 @@ def get_streams(media_type, media_id, config=None):
                 break
                 
         if not target_item:
-            return return_error("Movie/Show not found in HDGharTV database.")
+            return return_error("Movie/Show not found in HDGharTV internal database.")
             
         item_id = target_item.get("_id")
         if not item_id:
-            return return_error("Internal Item ID missing in search results.")
+            return return_error("Internal HDGhar Item ID is missing.")
             
         # 2. Get the Stream Links
         mt = "series" if media_type == "series" else "movie"
-        details_url = f"{api_host}/api/{mt}/{item_id}"
-        st, res = _request(details_url, headers={"Referer": f"{api_host}/"})
+        details_url = f"{API_HOST}/api/{mt}/{item_id}"
+        st, res = _request(details_url, headers={"Referer": f"{API_HOST}/"})
+        
         if st != 200 or not res:
-            return return_error(f"Details API Error {st}")
+            return return_error(f"Details API Error {st} at {details_url}")
             
         data = json.loads(res)
         streaming_links = []
@@ -155,7 +144,7 @@ def get_streams(media_type, media_id, config=None):
                     target_season = s
                     break
             if not target_season:
-                return return_error(f"Season {season} not found.")
+                return return_error(f"Season {season} not available on HDGhar.")
                 
             episodes = target_season.get("episodes", [])
             target_episode = None
@@ -164,12 +153,12 @@ def get_streams(media_type, media_id, config=None):
                     target_episode = e
                     break
             if not target_episode:
-                return return_error(f"Episode {episode} not found.")
+                return return_error(f"Episode {episode} not available on HDGhar.")
                 
             streaming_links = target_episode.get("streamingLinks", [])
             
         if not streaming_links:
-            return return_error("No streaming links available for this title.")
+            return return_error("HDGhar has no streaming links stored for this title.")
             
         # 3. Format Output
         results = []
@@ -191,14 +180,14 @@ def get_streams(media_type, media_id, config=None):
                 
             results.append({
                 "name": TITLE,
-                "title": f"HDGharTV | {quality} | {name}",
+                "title": f"HDGharTV | {quality} | Dual-Audio",
                 "url": url,
                 "behaviorHints": {
                     "notMyMetadata": True,
                     "proxyHeaders": {
                         "request": {
                             "User-Agent": USER_AGENT,
-                            "Referer": f"{api_host}/"
+                            "Referer": f"{API_HOST}/"
                         }
                     }
                 }
@@ -207,4 +196,4 @@ def get_streams(media_type, media_id, config=None):
         return results
 
     except Exception as e:
-        return return_error(f"Fatal Crash: {str(e)} | {traceback.format_exc()[:100]}")
+        return return_error(f"Fatal Crash: {str(e)}")
