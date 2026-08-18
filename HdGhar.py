@@ -1,5 +1,5 @@
 """
-MegaSource Scraper for HDGharTV (v2 - Direct API)
+MegaSource Scraper for HDGharTV (v3)
 """
 import json
 import urllib.parse
@@ -7,18 +7,15 @@ import urllib.request
 import traceback
 
 TITLE = "HDGharTV"
-VERSION = "1.0.1"
+VERSION = "1.0.3"
 DESCRIPTION = "HDGhar TV movies and series scraper"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 TMDB_API_KEY = "1865f43a0549ca50d341dd9ab8b29f49"
 
-# Exact decoded domain from the Nuvio plugin
+# We'll use the main API endpoint from the plugin logic
 API_HOST = "https://hdghartv.cc"
 
-# --- Error Handling ---
-
 def return_error(msg):
-    """Forces an error stream to appear so MegaSource doesn't fail silently."""
     return [{
         "name": "HDGHAR ERROR",
         "title": str(msg),
@@ -28,8 +25,6 @@ def return_error(msg):
             "proxyHeaders": {"request": {}}
         }
     }]
-
-# --- HTTP & API Utilities ---
 
 def _request(url, headers=None):
     req_headers = {"User-Agent": USER_AGENT}
@@ -67,19 +62,13 @@ def get_tmdb_meta(media_id, media_type):
     data = json.loads(res)
     
     title = data.get("name") if media_type == "series" else data.get("title")
-    rel_date = data.get("first_air_date") if media_type == "series" else data.get("release_date")
-    year = rel_date[:4] if rel_date else ""
-    
-    return {"tmdb_id": tmdb_id, "title": title, "year": year}
-
-# --- Main Scraper Entry Point ---
+    return {"tmdb_id": tmdb_id, "title": title}
 
 def get_streams(media_type, media_id, config=None):
     try:
         imdb_id = media_id
         season = episode = None
         
-        # Parse media_id for TV series
         if ":" in media_id:
             parts = media_id.split(":", 2)
             imdb_id = parts[0]
@@ -89,47 +78,46 @@ def get_streams(media_type, media_id, config=None):
                 
         meta = get_tmdb_meta(imdb_id, media_type)
         if not meta or not meta.get("tmdb_id"):
-            return return_error(f"Failed to fetch TMDB Metadata for {imdb_id}")
+            return return_error(f"Failed TMDB lookup for {imdb_id}")
             
         tmdb_id = meta["tmdb_id"]
         title = meta["title"]
         
-        # 1. Search the HDGhar Database
+        # Search HDGhar API
         search_url = f"{API_HOST}/api/search?q={urllib.parse.quote(title)}&type=all&page=1"
         st, res = _request(search_url, headers={"Referer": f"{API_HOST}/"})
         
         if st != 200 or not res:
-            return return_error(f"Search API Error {st} | Domain might be blocked or down.")
+            return return_error(f"Search failed with code {st}")
             
-        try:
-            data = json.loads(res)
-        except Exception:
-            return return_error("Failed to parse JSON from HDGhar search. Cloudflare block likely.")
-            
-        movies = data.get("movies", [])
-        series = data.get("series", [])
-        all_items = movies + series
+        data = json.loads(res)
+        all_items = data.get("movies", []) + data.get("series", [])
         
         target_item = None
         for item in all_items:
+            # Match by TMDB ID or loose title match if ID field differs
             if str(item.get("tmdbId")) == str(tmdb_id):
                 target_item = item
                 break
                 
+        # Fallback to name matching if TMDB ID isn't indexed identically on their backend
         if not target_item:
-            return return_error("Movie/Show not found in HDGharTV internal database.")
+            for item in all_items:
+                if title.lower() in item.get("title", "").lower() or title.lower() in item.get("name", "").lower():
+                    target_item = item
+                    break
+                    
+        if not target_item:
+            return return_error(f"Could not find '{title}' on HDGhar DB")
             
         item_id = target_item.get("_id")
-        if not item_id:
-            return return_error("Internal HDGhar Item ID is missing.")
-            
-        # 2. Get the Stream Links
         mt = "series" if media_type == "series" else "movie"
+        
         details_url = f"{API_HOST}/api/{mt}/{item_id}"
         st, res = _request(details_url, headers={"Referer": f"{API_HOST}/"})
         
         if st != 200 or not res:
-            return return_error(f"Details API Error {st} at {details_url}")
+            return return_error(f"Details failed with code {st}")
             
         data = json.loads(res)
         streaming_links = []
@@ -138,49 +126,25 @@ def get_streams(media_type, media_id, config=None):
             streaming_links = data.get("streamingLinks", [])
         else:
             seasons = data.get("seasons", [])
-            target_season = None
             for s in seasons:
                 if str(s.get("seasonNumber")) == str(season):
-                    target_season = s
+                    for e in s.get("episodes", []):
+                        if str(e.get("episodeNumber")) == str(episode):
+                            streaming_links = e.get("streamingLinks", [])
+                            break
                     break
-            if not target_season:
-                return return_error(f"Season {season} not available on HDGhar.")
-                
-            episodes = target_season.get("episodes", [])
-            target_episode = None
-            for e in episodes:
-                if str(e.get("episodeNumber")) == str(episode):
-                    target_episode = e
-                    break
-            if not target_episode:
-                return return_error(f"Episode {episode} not available on HDGhar.")
-                
-            streaming_links = target_episode.get("streamingLinks", [])
-            
+                    
         if not streaming_links:
-            return return_error("HDGhar has no streaming links stored for this title.")
+            return return_error("Found title, but streaming links list was empty.")
             
-        # 3. Format Output
         results = []
         for link in streaming_links:
             url = link.get("url")
             if not url:
                 continue
-                
-            name = link.get("name", "")
-            quality = "HD"
-            if "2160" in name.lower() or "4k" in name.lower():
-                quality = "4K"
-            elif "1080" in name.lower():
-                quality = "1080p"
-            elif "720" in name.lower():
-                quality = "720p"
-            elif "480" in name.lower():
-                quality = "480p"
-                
             results.append({
                 "name": TITLE,
-                "title": f"HDGharTV | {quality} | Dual-Audio",
+                "title": f"HDGharTV | Dual-Audio",
                 "url": url,
                 "behaviorHints": {
                     "notMyMetadata": True,
@@ -196,4 +160,4 @@ def get_streams(media_type, media_id, config=None):
         return results
 
     except Exception as e:
-        return return_error(f"Fatal Crash: {str(e)}")
+        return return_error(f"Crash: {str(e)}")
