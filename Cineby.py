@@ -1,5 +1,5 @@
 """
-MegaSource Scraper for Cineby (v4 - Endpoint Fixed)
+MegaSource Scraper for Cineby (v5 - Double Encode & Cache Bypass)
 """
 import base64
 import json
@@ -8,7 +8,7 @@ import urllib.request
 import traceback
 
 TITLE = "Cineby"
-VERSION = "1.0.4"
+VERSION = "1.0.5"
 DESCRIPTION = "Multi-server movie and TV streaming from Videasy network"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 HEADERS = {
@@ -49,7 +49,6 @@ def _request(url, headers=None):
         return 0, str(e)
 
 def get_api_host():
-    # Try both potential GitHub URL variations for domains.json
     for repo in ["nuvio-plugin", "nuvio_plugin"]:
         url = f"https://raw.githubusercontent.com/sapariyaneel/{repo}/refs/heads/main/domains.json"
         status, raw = _request(url)
@@ -231,9 +230,13 @@ def get_streams(media_type, media_id, config=None):
         if not seed:
             return return_error("Seed key was empty.")
             
-        # 2. Fetch encrypted sources payload
+        # 2. Double-encode the title for Cineby security
+        raw_title = meta.get("title", "")
+        encoded_title_once = urllib.parse.quote(raw_title, safe="")
+        
+        # urlencode below will apply the second layer of encoding automatically
         params = urllib.parse.urlencode({
-            "title": meta.get("title", ""),
+            "title": encoded_title_once,
             "mediaType": "tv" if media_type == "series" else "movie",
             "year": meta.get("year", ""),
             "episodeId": str(episode if media_type == "series" and episode else 1),
@@ -244,7 +247,7 @@ def get_streams(media_type, media_id, config=None):
             "seed": seed
         })
         
-        # FIXED ENDPOINT: /cdn/sources-with-title
+        # Hit the updated /cdn/sources-with-title endpoint
         sources_url = f"{api_host}/cdn/sources-with-title?{params}"
         sources_status, sources_enc = _request(sources_url, headers=HEADERS)
         
@@ -287,6 +290,3 @@ def get_streams(media_type, media_id, config=None):
 
     except Exception as e:
         return return_error(f"Fatal Crash: {str(e)} | {traceback.format_exc()[:100]}")
-
-
-
