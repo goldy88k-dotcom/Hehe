@@ -1,5 +1,5 @@
 """
-MegaSource Scraper for Cineby (v3)
+MegaSource Scraper for Cineby (v4 - Endpoint Fixed)
 """
 import base64
 import json
@@ -8,7 +8,7 @@ import urllib.request
 import traceback
 
 TITLE = "Cineby"
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 DESCRIPTION = "Multi-server movie and TV streaming from Videasy network"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 HEADERS = {
@@ -61,7 +61,7 @@ def get_api_host():
                     return host.rstrip('/')
             except:
                 pass
-    return "https://db.speedracelight.com"
+    return "https://api.speedracelight.com"
 
 def get_tmdb_meta(media_id, media_type):
     tmdb_id = media_id
@@ -244,7 +244,8 @@ def get_streams(media_type, media_id, config=None):
             "seed": seed
         })
         
-        sources_url = f"{api_host}/sources?{params}"
+        # FIXED ENDPOINT: /cdn/sources-with-title
+        sources_url = f"{api_host}/cdn/sources-with-title?{params}"
         sources_status, sources_enc = _request(sources_url, headers=HEADERS)
         
         if sources_status != 200:
@@ -286,5 +287,6 @@ def get_streams(media_type, media_id, config=None):
 
     except Exception as e:
         return return_error(f"Fatal Crash: {str(e)} | {traceback.format_exc()[:100]}")
+
 
 
