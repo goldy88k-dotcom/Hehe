@@ -1,5 +1,5 @@
 """
-MegaSource Diagnostic Scraper for Cineby
+MegaSource Scraper for Cineby (v3)
 """
 import base64
 import json
@@ -8,8 +8,8 @@ import urllib.request
 import traceback
 
 TITLE = "Cineby"
-VERSION = "1.0.2-DEBUG"
-DESCRIPTION = "Diagnostic Scraper for Cineby Videasy network"
+VERSION = "1.0.3"
+DESCRIPTION = "Multi-server movie and TV streaming from Videasy network"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 HEADERS = {
     "User-Agent": USER_AGENT,
@@ -17,11 +17,23 @@ HEADERS = {
     "Origin": "https://www.cineby.at/"
 }
 TMDB_API_KEY = "1865f43a0549ca50d341dd9ab8b29f49"
-DOMAINS_URL = "https://raw.githubusercontent.com/sapariyaneel/nuvio-plugin/refs/heads/main/domains.json"
-FALLBACK_API_HOST = "https://api.speedracelight.com"
 
+# --- Error Handling ---
 
-# --- HTTP & TMDB Utilities ---
+def return_error(msg):
+    """Forces an error stream to appear so MegaSource doesn't fail silently."""
+    return [{
+        "name": "CINEBY ERROR",
+        "title": str(msg),
+        # Dummy video so Stremio/MegaSource doesn't reject the stream format
+        "url": "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
+        "behaviorHints": {
+            "notMyMetadata": True,
+            "proxyHeaders": {"request": {}}
+        }
+    }]
+
+# --- HTTP & API Utilities ---
 
 def _request(url, headers=None):
     req_headers = {"User-Agent": USER_AGENT}
@@ -29,7 +41,7 @@ def _request(url, headers=None):
         req_headers.update(headers)
     req = urllib.request.Request(url, headers=req_headers)
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=12) as resp:
             return resp.status, resp.read().decode('utf-8', errors='replace')
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode('utf-8', errors='replace')
@@ -37,15 +49,19 @@ def _request(url, headers=None):
         return 0, str(e)
 
 def get_api_host():
-    status, raw_domains = _request(DOMAINS_URL)
-    if status == 200 and raw_domains:
-        try:
-            domains = json.loads(raw_domains)
-            host = domains.get("speedracelight") or FALLBACK_API_HOST
-            return host.rstrip('/')
-        except Exception:
-            pass
-    return FALLBACK_API_HOST
+    # Try both potential GitHub URL variations for domains.json
+    for repo in ["nuvio-plugin", "nuvio_plugin"]:
+        url = f"https://raw.githubusercontent.com/sapariyaneel/{repo}/refs/heads/main/domains.json"
+        status, raw = _request(url)
+        if status == 200 and raw:
+            try:
+                domains = json.loads(raw)
+                host = domains.get("speedracelight")
+                if host:
+                    return host.rstrip('/')
+            except:
+                pass
+    return "https://db.speedracelight.com"
 
 def get_tmdb_meta(media_id, media_type):
     tmdb_id = media_id
@@ -182,15 +198,7 @@ def decrypt_sources_payload(enc_str, seed_str, tmdb_id):
         
     return decrypted[4:].decode('utf-8', errors='replace')
 
-
 # --- Main Scraper Entry Point ---
-
-def return_error(msg):
-    return [{
-        "name": "CINEBY ERROR",
-        "title": str(msg),
-        "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-    }]
 
 def get_streams(media_type, media_id, config=None):
     try:
@@ -277,5 +285,6 @@ def get_streams(media_type, media_id, config=None):
         return results
 
     except Exception as e:
-        return return_error(f"Fatal Crash: {str(e)}\n{traceback.format_exc()[:100]}")
+        return return_error(f"Fatal Crash: {str(e)} | {traceback.format_exc()[:100]}")
+
 
