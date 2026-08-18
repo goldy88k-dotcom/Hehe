@@ -1,5 +1,5 @@
 """
-MegaSource Scraper for Cineby
+MegaSource Scraper for Cineby (Patched)
 """
 import base64
 import json
@@ -7,7 +7,7 @@ import urllib.parse
 import urllib.request
 
 TITLE = "Cineby"
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 DESCRIPTION = "Multi-server movie and TV streaming from Videasy network"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 HEADERS = {
@@ -17,10 +17,10 @@ HEADERS = {
 }
 TMDB_API_KEY = "1865f43a0549ca50d341dd9ab8b29f49"
 DOMAINS_URL = "https://raw.githubusercontent.com/sapariyaneel/nuvio-plugin/refs/heads/main/domains.json"
-FALLBACK_API_HOST = "https://speedracelight.com"
+FALLBACK_API_HOST = "https://api.speedracelight.com"
 
 
-# --- Cineby Decryption Cipher ---
+# --- Cineby Decryption Cipher (Javascript Sparse Array Matched) ---
 
 def _fmix32(h):
     h = h & 0xFFFFFFFF
@@ -45,7 +45,7 @@ def _fnv1a32(data_bytes):
     return _fmix32(h)
 
 def _make_keystream_state(seed_str, tmdb_id):
-    slots = [0] * 61
+    slots = [None] * 61
     seed_bytes = seed_str.encode('utf-8')
     fnv = _fnv1a32(seed_bytes)
     fmix_tmdb = _fmix32((int(tmdb_id) ^ 0x9E3779B9) & 0xFFFFFFFF)
@@ -63,18 +63,27 @@ def _next_keystream_word(state, counter):
     slots = state["slots"]
     acc = state["acc"]
     idx = acc % 61
-    slot_val = slots[idx] if idx < len(slots) else 0
+    
+    # Emulating JS "idx in array" behavior 
+    is_defined = slots[idx] is not None
+    slot_val = slots[idx] if is_defined else 0
     
     imul_val = (0x9E3779B9 * (counter + 1)) & 0xFFFFFFFF
     mixed = (slot_val ^ imul_val) & 0xFFFFFFFF
-    combined = (acc ^ mixed) & 0xFFFFFFFF
     
+    # Applying the JS bitwise mask based on whether the array index existed
+    if is_defined:
+        combined = (acc | mixed) & 0xFFFFFFFF
+    else:
+        combined = (acc ^ mixed) & 0xFFFFFFFF
+        
     r1 = idx & 0x1F
-    r2 = (idx % 8) & 0x1F
+    r2 = (idx * 7) & 0x1F  # Replicating JS Math.imul(idx, 7)
+    
     rot1 = _rotl32((combined + acc) & 0xFFFFFFFF, r1)
     rot2 = _rotl32(acc, r2)
     
-    word = _fmix32((rot1 ^ rot2 + 0x9E3779B9) & 0xFFFFFFFF)
+    word = _fmix32(((rot1 ^ rot2) + 0x9E3779B9) & 0xFFFFFFFF)
     slots[idx] = word
     state["acc"] = word
     return word
@@ -127,7 +136,7 @@ def _request(url, headers=None):
         req_headers.update(headers)
     req = urllib.request.Request(url, headers=req_headers)
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:
             if resp.status == 200:
                 return resp.read().decode('utf-8', errors='replace')
     except Exception:
