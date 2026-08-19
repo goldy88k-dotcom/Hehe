@@ -1,27 +1,30 @@
 import http.cookiejar
 import json
-import re
 import urllib.error
 import urllib.parse
 import urllib.request
 
-TITLE = "HdGhar Scraper"
-VERSION = "1.0.0"
+TITLE = "HDGhar Scraper"
+VERSION = "1.0.1"
 DESCRIPTION = "Fetches streams from HDGhar via its API"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
 
 # Inheriting TMDB Key from your default scraper for IMDB -> TMDB conversion
 TMDB_API_KEY = "92c1507cc18d85200e7a0b96abb373316" 
 
-# NOTE: The domain in the JS was obfuscated. I've set it to hdghartv.com, 
-# but if the API lives on a different TLD (like .site or .art), update this variable!
-HDGHAR_API = "https://hdghartv.com" 
+# Decoded directly from the Nuvio obfuscated script
+HDGHAR_API = "https://hdghar.tv" 
 
 _cookiejar = http.cookiejar.CookieJar()
 _opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_cookiejar))
 
 def _request(url, method="GET", data=None, headers=None):
-    request_headers = {"User-Agent": USER_AGENT}
+    # Added standard browser accept headers to prevent 403 Forbidden blocks
+    request_headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9"
+    }
     if headers:
         request_headers.update(headers)
     
@@ -45,6 +48,7 @@ def imdb_to_tmdb(imdb_id):
     find_url = "https://api.themoviedb.org/3/find/" + urllib.parse.quote(imdb_id)
     query = urllib.parse.urlencode({"api_key": TMDB_API_KEY, "external_source": "imdb_id"})
     status, body = _request(find_url + "?" + query)
+    
     if status != 200:
         return None
     try:
@@ -65,12 +69,12 @@ def get_hdghar_streams(media_type, imdb_id, season=None, episode=None):
     if not tmdb_info:
         return []
         
-    tmdb_id = tmdb_info["tmdb_id"]
+    tmdb_id = str(tmdb_info["tmdb_id"])
     title = tmdb_info["title"]
     
     # 1. Search HDGhar API for the specific Title
     search_url = f"{HDGHAR_API}/api/search?q={urllib.parse.quote(title)}&type=all&page=1"
-    headers = {"Referer": HDGHAR_API + "/"}
+    headers = {"Referer": HDGHAR_API + "/", "Origin": HDGHAR_API}
     status, body = _request(search_url, headers=headers)
     
     if status != 200:
@@ -88,7 +92,8 @@ def get_hdghar_streams(media_type, imdb_id, season=None, episode=None):
     # 2. Match the TMDB ID from the search results to get the internal _id
     target_id = None
     for item in all_items:
-        if item.get("tmdbId") == tmdb_id:
+        # Enforce string comparison to prevent int/str mismatches
+        if str(item.get("tmdbId")) == tmdb_id:
             target_id = item.get("_id")
             break
             
@@ -116,10 +121,10 @@ def get_hdghar_streams(media_type, imdb_id, season=None, episode=None):
     else:
         seasons = detail_data.get("seasons", [])
         for s in seasons:
-            if s.get("seasonNumber") == int(season):
+            if str(s.get("seasonNumber")) == str(season):
                 episodes = s.get("episodes", [])
                 for e in episodes:
-                    if e.get("episodeNumber") == int(episode):
+                    if str(e.get("episodeNumber")) == str(episode):
                         streaming_links = e.get("streamingLinks", [])
                         break
                 break
@@ -159,7 +164,8 @@ def get_hdghar_streams(media_type, imdb_id, season=None, episode=None):
                 "proxyHeaders": {
                     "request": {
                         "User-Agent": USER_AGENT,
-                        "Referer": HDGHAR_API + "/"
+                        "Referer": HDGHAR_API + "/",
+                        "Origin": HDGHAR_API
                     }
                 }
             }
