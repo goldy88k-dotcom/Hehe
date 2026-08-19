@@ -1,5 +1,5 @@
 """
-MegaSource Scraper for Cineby (v5 - Double Encode & Cache Bypass)
+MegaSource Scraper for Cineby (v6 - Speed Optimized & Speedrace CDN Header Fix)
 """
 import base64
 import json
@@ -8,8 +8,8 @@ import urllib.request
 import traceback
 
 TITLE = "Cineby"
-VERSION = "1.0.5"
-DESCRIPTION = "Multi-server movie and TV streaming from Videasy network"
+VERSION = "1.0.6"
+DESCRIPTION = "Multi-server movie and TV streaming from Videasy network (Speed Optimized)"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 HEADERS = {
     "User-Agent": USER_AGENT,
@@ -280,7 +280,12 @@ def get_streams(media_type, media_id, config=None):
                             "request": {
                                 "User-Agent": USER_AGENT,
                                 "Referer": "https://www.cineby.at/",
-                                "Origin": "https://www.cineby.at/"
+                                "Origin": "https://www.cineby.at/",
+                                "Accept": "*/*",
+                                "Accept-Language": "en-US,en;q=0.9",
+                                "Sec-Fetch-Dest": "empty",
+                                "Sec-Fetch-Mode": "cors",
+                                "Sec-Fetch-Site": "cross-site"
                             }
                         }
                     }
