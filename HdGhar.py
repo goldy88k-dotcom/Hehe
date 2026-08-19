@@ -5,12 +5,12 @@ import urllib.parse
 import urllib.request
 
 TITLE = "HDGhar Scraper"
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 DESCRIPTION = "Fetches streams from HDGhar via its API"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
 
-# Swapped out the dead key for a working, public TMDB API Key
-TMDB_API_KEY = "8d6d91941230817f7807d643736e8a49"
+# Updated to your personal TMDB API Key
+TMDB_API_KEY = "b78ae12f6a9ed6fb82f78f12207a29a9"
 HDGHAR_API = "https://hdghartv.cc"
 
 _cookiejar = http.cookiejar.CookieJar()
@@ -165,3 +165,4 @@ def get_streams(media_type, media_id, config=None):
         })
         
     return streams
+
