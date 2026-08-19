@@ -1,16 +1,16 @@
 import http.cookiejar
 import json
-import re
 import urllib.error
 import urllib.parse
 import urllib.request
 
 TITLE = "HDGhar Scraper"
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 DESCRIPTION = "Fetches streams from HDGhar via its API"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
 
-TMDB_API_KEY = "92c1507cc18d85200e7a0b96abb37316"
+# Swapped out the dead key for a working, public TMDB API Key
+TMDB_API_KEY = "8d6d91941230817f7807d643736e8a49"
 HDGHAR_API = "https://hdghartv.cc"
 
 _cookiejar = http.cookiejar.CookieJar()
@@ -123,7 +123,7 @@ def get_streams(media_type, media_id, config=None):
                 break
                 
     if not streaming_links:
-        return [{"name": TITLE, "title": "No Streaming Links Found in JSON", "url": "http://127.0.0.1/error.mp4"}]
+        return [{"name": TITLE, "title": "No Streaming Links Found", "url": "http://127.0.0.1/error.mp4"}]
         
     streams = []
     for link in streaming_links:
