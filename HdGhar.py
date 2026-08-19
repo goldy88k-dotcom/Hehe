@@ -3,23 +3,32 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
+import ssl
 
 TITLE = "HDGhar Scraper"
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 DESCRIPTION = "Fetches streams from HDGhar via its API"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
 
 # Inheriting TMDB Key from your default scraper for IMDB -> TMDB conversion
 TMDB_API_KEY = "92c1507cc18d85200e7a0b96abb373316" 
 
-# Decoded directly from the Nuvio obfuscated script
-HDGHAR_API = "https://hdghar.tv" 
+# Updated to the active working domain
+HDGHAR_API = "https://hdghartv.com.pk" 
+
+# Creating an unverified SSL context to prevent handshake errors on mirror domains
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
 
 _cookiejar = http.cookiejar.CookieJar()
-_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_cookiejar))
+# Inject the custom SSL context into our urllib opener
+_opener = urllib.request.build_opener(
+    urllib.request.HTTPSHandler(context=ctx), 
+    urllib.request.HTTPCookieProcessor(_cookiejar)
+)
 
 def _request(url, method="GET", data=None, headers=None):
-    # Added standard browser accept headers to prevent 403 Forbidden blocks
     request_headers = {
         "User-Agent": USER_AGENT,
         "Accept": "application/json, text/plain, */*",
@@ -92,7 +101,6 @@ def get_hdghar_streams(media_type, imdb_id, season=None, episode=None):
     # 2. Match the TMDB ID from the search results to get the internal _id
     target_id = None
     for item in all_items:
-        # Enforce string comparison to prevent int/str mismatches
         if str(item.get("tmdbId")) == tmdb_id:
             target_id = item.get("_id")
             break
@@ -115,7 +123,7 @@ def get_hdghar_streams(media_type, imdb_id, season=None, episode=None):
         
     streaming_links = []
     
-    # 4. Extract stream links (Handling movies vs series logic)
+    # 4. Extract stream links
     if media_type == "movie":
         streaming_links = detail_data.get("streamingLinks", [])
     else:
@@ -130,7 +138,7 @@ def get_hdghar_streams(media_type, imdb_id, season=None, episode=None):
                 break
                 
     streams = []
-    # 5. Build the final output array formatted for Stremio/MegaSource
+    # 5. Build the final output array
     for link in streaming_links:
         url = link.get("url")
         if not url:
@@ -138,7 +146,6 @@ def get_hdghar_streams(media_type, imdb_id, season=None, episode=None):
             
         link_name = link.get("name", "")
         
-        # Parse basic quality details from the link name
         quality = "HD"
         if "2160p" in link_name.lower() or "4k" in link_name.lower():
             quality = "4K 2160p"
@@ -178,7 +185,6 @@ def get_streams(media_type, media_id, config=None):
     episode = None
     imdb_id = media_id
     
-    # Check if request is for a series formatted like 'tt0944947:1:1'
     if ":" in media_id:
         parts = media_id.split(":", 2)
         imdb_id = parts[0]
