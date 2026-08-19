@@ -4,7 +4,7 @@ import urllib.request
 import traceback
 
 TITLE = "HDGhar Scraper"
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 DESCRIPTION = "Dynamic domain fetching scraper for HDGhar"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
 
@@ -12,7 +12,6 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 TMDB_API_KEY = "b78ae12f6a9ed6fb82f78f12207a29a9"
 
 def return_error(msg):
-    """Uses a real video URL so Stremio actually displays the error message."""
     return [{
         "name": "HDGHAR ERROR",
         "title": str(msg),
@@ -41,21 +40,20 @@ def _request(url, headers=None):
 
 def get_dynamic_hosts():
     hosts = []
-    # 1. Try fetching the latest domain from Nuvio's GitHub list
+    # Fetch from Nuvio domains.json to ensure it stays up to date
     for repo in ["nuvio-plugin", "nuvio_plugin"]:
         url = f"https://raw.githubusercontent.com/sapariyaneel/{repo}/refs/heads/main/domains.json"
         status, raw = _request(url)
         if status == 200 and raw:
             try:
                 domains = json.loads(raw)
-                # Look for hdghartv in the Nuvio JSON
                 host = domains.get("hdghartv") or domains.get("hdghar")
                 if host and host not in hosts:
                     hosts.append(host.rstrip('/'))
             except:
                 pass
-                
-    # 2. Add known fallbacks just in case the JSON is empty
+    
+    # Fallback known domains
     fallbacks = [
         "https://hdghartv.cc",
         "https://hdghartv.com.pk",
@@ -66,7 +64,6 @@ def get_dynamic_hosts():
     for fb in fallbacks:
         if fb not in hosts:
             hosts.append(fb)
-            
     return hosts
 
 def get_streams(media_type, media_id, config=None):
@@ -80,7 +77,7 @@ def get_streams(media_type, media_id, config=None):
                 season = parts[1]
                 episode = parts[2]
                 
-        # --- TMDB Lookup ---
+        # 1. TMDB Lookup
         find_url = f"https://api.themoviedb.org/3/find/{imdb_id}?api_key={TMDB_API_KEY}&external_source=imdb_id"
         status, body = _request(find_url)
         
@@ -106,7 +103,7 @@ def get_streams(media_type, media_id, config=None):
         if not tmdb_id or not title:
             return return_error("Media found, but TMDB returned no title or ID.")
             
-        # --- HDGhar Dynamic Search Loop ---
+        # 2. HDGhar Dynamic Search
         hosts = get_dynamic_hosts()
         search_data = None
         working_host = None
@@ -123,17 +120,15 @@ def get_streams(media_type, media_id, config=None):
                 try:
                     search_data = json.loads(s_body)
                     working_host = host
-                    break # Found the active domain! Exit the loop.
+                    break
                 except Exception:
                     last_error = f"JSON Parse error on {host}"
             else:
                 last_error = f"HTTP {s_status} on {host}"
                 
         if not working_host or not search_data:
-            # If all domains fail (e.g. they all 404), display the exact error in Stremio!
             return return_error(f"All domains failed. Last error: {last_error}")
             
-        # --- Process Search Results ---
         movies = search_data.get("movies", [])
         series = search_data.get("series", [])
         all_items = movies + series
@@ -145,22 +140,33 @@ def get_streams(media_type, media_id, config=None):
                 break
                 
         if not target_id:
-            return return_error(f"Media searched successfully on {working_host}, but no matching TMDB ID found in results.")
+            return return_error(f"Media searched successfully on {working_host}, but no matching TMDB ID found.")
             
-        # --- Fetch Media Details ---
-        detail_type = "movie" if media_type == "movie" else "series"
-        detail_url = f"{working_host}/api/{detail_type}/{target_id}"
+        # 3. Multi-Path Details Fetch (Fixes the 404 Error)
+        paths_to_try = []
+        if media_type == "movie":
+            paths_to_try = [f"/api/movies/{target_id}", f"/api/movie/{target_id}"]
+        else:
+            paths_to_try = [f"/api/series/{target_id}", f"/api/tv/{target_id}", f"/api/show/{target_id}"]
+            
+        detail_data = None
+        working_detail_url = ""
         
-        d_status, d_body = _request(detail_url, headers={"Referer": working_host + "/"})
-        if d_status != 200:
-            return return_error(f"Details API Error: HTTP {d_status} on {detail_url}")
+        for path in paths_to_try:
+            detail_url = f"{working_host}{path}"
+            d_status, d_body = _request(detail_url, headers={"Referer": working_host + "/"})
+            if d_status == 200:
+                try:
+                    detail_data = json.loads(d_body)
+                    working_detail_url = detail_url
+                    break
+                except Exception:
+                    pass
+                    
+        if not detail_data:
+            return return_error(f"Details API 404: Tried {paths_to_try} and all failed.")
             
-        try:
-            detail_data = json.loads(d_body)
-        except Exception:
-            return return_error(f"Failed to parse Details JSON from {detail_url}")
-            
-        # --- Extract Streaming Links ---
+        # 4. Extract Streaming Links
         streaming_links = []
         if media_type == "movie":
             streaming_links = detail_data.get("streamingLinks", [])
@@ -176,9 +182,9 @@ def get_streams(media_type, media_id, config=None):
                     break
                     
         if not streaming_links:
-            return return_error(f"Successfully scraped {working_host}, but no streaming URLs were found inside the JSON data.")
+            return return_error(f"Scraped {working_detail_url}, but no streaming URLs found.")
             
-        # --- Format Output for Stremio ---
+        # 5. Format Output
         streams = []
         for link in streaming_links:
             url = link.get("url")
