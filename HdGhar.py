@@ -5,13 +5,11 @@ import urllib.parse
 import urllib.request
 
 TITLE = "HDGhar Scraper"
-VERSION = "1.1.2"
-DESCRIPTION = "Fetches streams from HDGhar via its API"
+VERSION = "1.1.3 (Auto-Fallback)"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
 
-# Updated to your personal TMDB API Key
+# Using your personal TMDB Key
 TMDB_API_KEY = "b78ae12f6a9ed6fb82f78f12207a29a9"
-HDGHAR_API = "https://hdghartv.cc"
 
 _cookiejar = http.cookiejar.CookieJar()
 _opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_cookiejar))
@@ -42,13 +40,12 @@ def get_streams(media_type, media_id, config=None):
         parts = media_id.split(":", 2)
         imdb_id, season, episode = parts[0], parts[1], parts[2]
         
-    # 1. TMDB Lookup
     find_url = "https://api.themoviedb.org/3/find/" + urllib.parse.quote(imdb_id)
     query = urllib.parse.urlencode({"api_key": TMDB_API_KEY, "external_source": "imdb_id"})
     status, body = _request(find_url + "?" + query)
     
     if status != 200:
-        return [{"name": TITLE, "title": f"TMDB Error: {status}", "url": "http://127.0.0.1/error.mp4"}]
+        return [{"name": TITLE, "title": f"TMDB Error: {status} on {find_url}", "url": "http://127.0.0.1/error.mp4"}]
         
     try:
         data = json.loads(body)
@@ -69,18 +66,44 @@ def get_streams(media_type, media_id, config=None):
     if not tmdb_id or not title:
         return [{"name": TITLE, "title": "No TMDB Match Found", "url": "http://127.0.0.1/error.mp4"}]
         
-    # 2. HDGhar Search
-    search_url = f"{HDGHAR_API}/api/search?q={urllib.parse.quote(title)}&type=all&page=1"
-    headers = {"Referer": HDGHAR_API + "/", "Accept": "application/json"}
-    status, body = _request(search_url, headers=headers)
+    # Auto-Fallback across known HDGhar domains
+    DOMAINS = [
+        "https://hdghartv.cc", 
+        "https://hdghartv.com.pk", 
+        "https://api.hdghartv.cc",
+        "https://hdghartv.net"
+    ]
     
-    if status != 200:
-        return [{"name": TITLE, "title": f"HDGhar Search Error: HTTP {status}", "url": "http://127.0.0.1/error.mp4"}]
+    search_data = None
+    working_domain = None
+    last_status = 0
+    last_url = ""
+    
+    for domain in DOMAINS:
+        search_url = f"{domain}/api/search?q={urllib.parse.quote(title)}&type=all&page=1"
+        last_url = search_url
         
-    try:
-        search_data = json.loads(body)
-    except Exception:
-        return [{"name": TITLE, "title": "HDGhar Search JSON Error", "url": "http://127.0.0.1/error.mp4"}]
+        # Adding extra standard headers to bypass basic firewalls
+        headers = {
+            "Referer": domain + "/", 
+            "Accept": "application/json, text/plain, */*",
+            "X-Requested-With": "XMLHttpRequest"
+        }
+        
+        status, body = _request(search_url, headers=headers)
+        last_status = status
+        
+        if status == 200:
+            try:
+                search_data = json.loads(body)
+                working_domain = domain
+                break
+            except Exception:
+                pass
+
+    if not working_domain or not search_data:
+        # If every single domain returns a 404/error, it will print the exact URL it failed on!
+        return [{"name": TITLE, "title": f"Search Error: HTTP {last_status} on {last_url}", "url": "http://127.0.0.1/error.mp4"}]
         
     movies = search_data.get("movies", [])
     series = search_data.get("series", [])
@@ -93,15 +116,14 @@ def get_streams(media_type, media_id, config=None):
             break
             
     if not target_id:
-        return [{"name": TITLE, "title": "No Match in HDGhar Search", "url": "http://127.0.0.1/error.mp4"}]
+        return [{"name": TITLE, "title": f"No Match in HDGhar Search (Domain: {working_domain})", "url": "http://127.0.0.1/error.mp4"}]
         
-    # 3. HDGhar Details Fetch
     detail_type = "movie" if media_type == "movie" else "series"
-    detail_url = f"{HDGHAR_API}/api/{detail_type}/{target_id}"
+    detail_url = f"{working_domain}/api/{detail_type}/{target_id}"
     
-    status, body = _request(detail_url, headers=headers)
+    status, body = _request(detail_url, headers={"Referer": working_domain + "/"})
     if status != 200:
-        return [{"name": TITLE, "title": f"HDGhar Details Error: HTTP {status}", "url": "http://127.0.0.1/error.mp4"}]
+        return [{"name": TITLE, "title": f"Details Error: HTTP {status} on {detail_url}", "url": "http://127.0.0.1/error.mp4"}]
         
     try:
         detail_data = json.loads(body)
@@ -158,11 +180,10 @@ def get_streams(media_type, media_id, config=None):
                 "proxyHeaders": {
                     "request": {
                         "User-Agent": USER_AGENT,
-                        "Referer": HDGHAR_API + "/"
+                        "Referer": working_domain + "/"
                     }
                 }
             }
         })
         
     return streams
-
