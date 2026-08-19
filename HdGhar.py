@@ -5,12 +5,15 @@ import urllib.parse
 import urllib.request
 
 TITLE = "HDGhar Scraper"
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 DESCRIPTION = "Fetches streams from HDGhar via its API"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
 
-TMDB_API_KEY = "92c1507cc18d85200e7a0b96abb373316" 
-HDGHAR_API = "https://hdghartv.com.pk" 
+# Fixed the typo here: removed the extra '3' at the end!
+TMDB_API_KEY = "92c1507cc18d85200e7a0b96abb37316" 
+
+# Updated to the actual API endpoint from the redirect
+HDGHAR_API = "https://hdghartv.cc" 
 
 _cookiejar = http.cookiejar.CookieJar()
 _opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_cookiejar))
