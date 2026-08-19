@@ -3,16 +3,12 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
+import traceback
 
 TITLE = "HDGhar Scraper"
-VERSION = "1.0.5 (Debug Mode)"
-DESCRIPTION = "Fetches streams from HDGhar with debug output"
+VERSION = "1.0.6 (Full Debug)"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
-
-# TMDB Key 
 TMDB_API_KEY = "92c1507cc18d85200e7a0b96abb37316" 
-
-# Base API
 HDGHAR_API = "https://hdghartv.cc" 
 
 _cookiejar = http.cookiejar.CookieJar()
@@ -44,10 +40,9 @@ def _request(url, method="GET", data=None, headers=None):
         return 0, str(e)
 
 def _debug_stream(step, msg):
-    # Returns a fake stream so you can read the error message in Stremio
     return [{
         "name": "DEBUG ERROR",
-        "title": f"Failed at [{step}]\nError: {msg}",
+        "title": f"Failed at [{step}]\n{msg}",
         "url": "http://127.0.0.1/debug.mp4"
     }]
 
@@ -63,35 +58,33 @@ def imdb_to_tmdb(imdb_id):
     except (ValueError, TypeError):
         return {"error": "TMDB JSON Parse Error"}
         
-    if data.get("movie_results"):
+    if data.get("movie_results") and len(data["movie_results"]) > 0:
         item = data["movie_results"][0]
-        return {"type": "movie", "tmdb_id": item["id"], "title": item.get("title")}
-    if data.get("tv_results"):
+        return {"type": "movie", "tmdb_id": item["id"], "title": item.get("title", "")}
+    if data.get("tv_results") and len(data["tv_results"]) > 0:
         item = data["tv_results"][0]
-        return {"type": "tv", "tmdb_id": item["id"], "title": item.get("name")}
+        return {"type": "tv", "tmdb_id": item["id"], "title": item.get("name", "")}
     return {"error": "No TMDB results found"}
 
 def get_hdghar_streams(media_type, imdb_id, season=None, episode=None):
-    # STEP 1: TMDB Lookup
     tmdb_info = imdb_to_tmdb(imdb_id)
     if "error" in tmdb_info:
-        return _debug_stream("TMDB API", tmdb_info["error"])
+        return _debug_stream("TMDB Lookup", tmdb_info["error"])
         
     tmdb_id = str(tmdb_info["tmdb_id"])
-    title = tmdb_info["title"]
+    title = str(tmdb_info["title"])
     
-    # STEP 2: HDGhar Search
     search_url = f"{HDGHAR_API}/api/search?q={urllib.parse.quote(title)}&type=all&page=1"
     headers = {"Referer": HDGHAR_API + "/"}
     status, body = _request(search_url, headers=headers)
     
     if status != 200:
-        return _debug_stream("HDGHAR SEARCH", f"HTTP {status} - {body[:60]}")
+        return _debug_stream("HDGhar Search Request", f"HTTP {status} - {body[:80]}")
         
     try:
         search_data = json.loads(body)
     except Exception:
-        return _debug_stream("SEARCH PARSE", "Failed to parse JSON. Might be Cloudflare.")
+        return _debug_stream("HDGhar Search Parse", f"Failed to parse JSON. Body preview:\n{body[:80]}")
         
     movies = search_data.get("movies", [])
     series = search_data.get("series", [])
@@ -104,20 +97,19 @@ def get_hdghar_streams(media_type, imdb_id, season=None, episode=None):
             break
             
     if not target_id:
-        return _debug_stream("SEARCH MATCH", f"No TMDB ID {tmdb_id} found in {len(all_items)} results")
+        return _debug_stream("HDGhar Match", f"Found {len(all_items)} search results, but none matched TMDB ID {tmdb_id}")
         
-    # STEP 3: HDGhar Details API
     detail_type = "movie" if media_type == "movie" else "series"
     detail_url = f"{HDGHAR_API}/api/{detail_type}/{target_id}"
     
     status, body = _request(detail_url, headers=headers)
     if status != 200:
-        return _debug_stream("DETAILS API", f"HTTP {status}")
+        return _debug_stream("HDGhar Details Request", f"HTTP {status} for ID {target_id}")
         
     try:
         detail_data = json.loads(body)
     except Exception:
-        return _debug_stream("DETAILS PARSE", "Failed to parse JSON details")
+        return _debug_stream("HDGhar Details Parse", "Failed to parse JSON details.")
         
     streaming_links = []
     
@@ -135,7 +127,7 @@ def get_hdghar_streams(media_type, imdb_id, season=None, episode=None):
                 break
                 
     if not streaming_links:
-        return _debug_stream("EXTRACTION", "Found the media, but streamingLinks array was empty")
+        return _debug_stream("Link Extraction", f"Media details found, but 'streamingLinks' array was empty.")
                 
     streams = []
     for link in streaming_links:
@@ -179,19 +171,28 @@ def get_hdghar_streams(media_type, imdb_id, season=None, episode=None):
     return streams
 
 def get_streams(media_type, media_id, config=None):
-    season = None
-    episode = None
-    imdb_id = media_id
-    
-    if ":" in media_id:
-        parts = media_id.split(":", 2)
-        imdb_id = parts[0]
-        season = parts[1]
-        episode = parts[2]
+    try:
+        season = None
+        episode = None
+        imdb_id = media_id
         
-    if media_type == "movie":
-        return get_hdghar_streams("movie", imdb_id)
-    elif media_type == "series" and season and episode:
-        return get_hdghar_streams("series", imdb_id, season, episode)
-        
-    return []
+        if ":" in media_id:
+            parts = media_id.split(":", 2)
+            imdb_id = parts[0]
+            season = parts[1]
+            episode = parts[2]
+            
+        if media_type == "movie":
+            return get_hdghar_streams("movie", imdb_id)
+        elif media_type == "series" and season and episode:
+            return get_hdghar_streams("series", imdb_id, season, episode)
+            
+        return []
+    except Exception as e:
+        # If the code crashes for ANY reason, MegaSource will print it here instead of failing silently.
+        error_trace = traceback.format_exc()
+        return [{
+            "name": "CRASH",
+            "title": f"Fatal Exception:\n{str(e)}",
+            "url": "http://127.0.0.1/crash.mp4"
+        }]
