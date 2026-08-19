@@ -4,8 +4,8 @@ import urllib.request
 import traceback
 
 TITLE = "HDGhar Scraper"
-VERSION = "2.0.1"
-DESCRIPTION = "Dynamic domain fetching scraper for HDGhar"
+VERSION = "2.0.2"
+DESCRIPTION = "Dynamic domain scraper for HDGhar with correct API routing"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
 
 # Your personal TMDB Key
@@ -40,7 +40,7 @@ def _request(url, headers=None):
 
 def get_dynamic_hosts():
     hosts = []
-    # Fetch from Nuvio domains.json to ensure it stays up to date
+    # 1. Check Nuvio's live domain configuration
     for repo in ["nuvio-plugin", "nuvio_plugin"]:
         url = f"https://raw.githubusercontent.com/sapariyaneel/{repo}/refs/heads/main/domains.json"
         status, raw = _request(url)
@@ -53,7 +53,7 @@ def get_dynamic_hosts():
             except:
                 pass
     
-    # Fallback known domains
+    # 2. Append standard fallbacks
     fallbacks = [
         "https://hdghartv.cc",
         "https://hdghartv.com.pk",
@@ -77,7 +77,7 @@ def get_streams(media_type, media_id, config=None):
                 season = parts[1]
                 episode = parts[2]
                 
-        # 1. TMDB Lookup
+        # --- 1. TMDB Lookup ---
         find_url = f"https://api.themoviedb.org/3/find/{imdb_id}?api_key={TMDB_API_KEY}&external_source=imdb_id"
         status, body = _request(find_url)
         
@@ -103,7 +103,7 @@ def get_streams(media_type, media_id, config=None):
         if not tmdb_id or not title:
             return return_error("Media found, but TMDB returned no title or ID.")
             
-        # 2. HDGhar Dynamic Search
+        # --- 2. HDGhar Dynamic Search ---
         hosts = get_dynamic_hosts()
         search_data = None
         working_host = None
@@ -133,21 +133,32 @@ def get_streams(media_type, media_id, config=None):
         series = search_data.get("series", [])
         all_items = movies + series
         
-        target_id = None
+        target_item = None
         for item in all_items:
             if str(item.get("tmdbId")) == tmdb_id:
-                target_id = item.get("_id")
+                target_item = item
                 break
                 
-        if not target_id:
+        if not target_item:
             return return_error(f"Media searched successfully on {working_host}, but no matching TMDB ID found.")
             
-        # 3. Multi-Path Details Fetch (Fixes the 404 Error)
+        # Extract possible ID parameters (some APIs use '_id', some use 'url' or 'slug')
+        target_id = target_item.get("_id")
+        target_url = target_item.get("url")
+        target_slug = target_item.get("slug")
+        
+        # Build an array of valid IDs to test against the endpoints
+        candidates = [c for c in [target_id, target_url, target_slug] if c]
+            
+        # --- 3. Multi-Path Details Fetch ---
         paths_to_try = []
         if media_type == "movie":
-            paths_to_try = [f"/api/movies/{target_id}", f"/api/movie/{target_id}"]
+            for c in candidates:
+                # The crucial /public/ endpoint extracted from the obfuscated JS
+                paths_to_try.extend([f"/api/movies/public/{c}", f"/api/movie/public/{c}", f"/api/movies/{c}"])
         else:
-            paths_to_try = [f"/api/series/{target_id}", f"/api/tv/{target_id}", f"/api/show/{target_id}"]
+            for c in candidates:
+                paths_to_try.extend([f"/api/series/public/{c}", f"/api/tv/public/{c}", f"/api/series/{c}"])
             
         detail_data = None
         working_detail_url = ""
@@ -164,9 +175,9 @@ def get_streams(media_type, media_id, config=None):
                     pass
                     
         if not detail_data:
-            return return_error(f"Details API 404: Tried {paths_to_try} and all failed.")
+            return return_error(f"Details API 404: Tried {paths_to_try[:3]} and all failed.")
             
-        # 4. Extract Streaming Links
+        # --- 4. Extract Streaming Links ---
         streaming_links = []
         if media_type == "movie":
             streaming_links = detail_data.get("streamingLinks", [])
@@ -184,7 +195,7 @@ def get_streams(media_type, media_id, config=None):
         if not streaming_links:
             return return_error(f"Scraped {working_detail_url}, but no streaming URLs found.")
             
-        # 5. Format Output
+        # --- 5. Format Output ---
         streams = []
         for link in streaming_links:
             url = link.get("url")
