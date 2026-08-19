@@ -3,9 +3,9 @@ import urllib.parse
 import urllib.request
 import traceback
 
-TITLE = "HDGhar Scraper"
-VERSION = "2.0.2"
-DESCRIPTION = "Dynamic domain scraper for HDGhar with correct API routing"
+TITLE = "HDGhar"
+VERSION = "2.0.3"
+DESCRIPTION = "Dynamic domain scraper for HDGhar with resolution badges"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
 
 # Your personal TMDB Key
@@ -40,7 +40,7 @@ def _request(url, headers=None):
 
 def get_dynamic_hosts():
     hosts = []
-    # 1. Check Nuvio's live domain configuration
+    # Fetch from Nuvio's domains.json to guarantee long-term stability
     for repo in ["nuvio-plugin", "nuvio_plugin"]:
         url = f"https://raw.githubusercontent.com/sapariyaneel/{repo}/refs/heads/main/domains.json"
         status, raw = _request(url)
@@ -53,7 +53,7 @@ def get_dynamic_hosts():
             except:
                 pass
     
-    # 2. Append standard fallbacks
+    # Standard fallbacks
     fallbacks = [
         "https://hdghartv.cc",
         "https://hdghartv.com.pk",
@@ -66,6 +66,42 @@ def get_dynamic_hosts():
             hosts.append(fb)
     return hosts
 
+def parse_stream_info(link):
+    """Deep search across all keys to accurately extract quality and audio details."""
+    quality_raw = str(link.get("quality", ""))
+    name_raw = str(link.get("name", ""))
+    url_raw = str(link.get("url", ""))
+    res_raw = str(link.get("resolution", ""))
+    
+    # Combine all fields to catch resolution tags embedded anywhere in the metadata
+    full_text = f"{quality_raw} {name_raw} {res_raw} {url_raw}".lower()
+    
+    rank = 1
+    quality = "HD"
+    
+    if "2160p" in full_text or "4k" in full_text or "uhd" in full_text:
+        quality = "4K 2160p"
+        rank = 4
+    elif "1080p" in full_text or "fhd" in full_text:
+        quality = "1080p"
+        rank = 3
+    elif "720p" in full_text or "hd" in full_text:
+        quality = "720p"
+        rank = 2
+    elif "480p" in full_text or "sd" in full_text:
+        quality = "480p"
+        rank = 1
+    elif quality_raw:
+        quality = quality_raw.upper()
+        
+    audio = "Dual-Audio"
+    if ("hindi" in full_text or "hin" in full_text) and not ("multi" in full_text or "dual" in full_text):
+        audio = "Hindi"
+    elif "english" in full_text or "eng" in full_text:
+        audio = "English"
+        
+    return quality, audio, rank
+
 def get_streams(media_type, media_id, config=None):
     try:
         imdb_id = media_id
@@ -77,7 +113,7 @@ def get_streams(media_type, media_id, config=None):
                 season = parts[1]
                 episode = parts[2]
                 
-        # --- 1. TMDB Lookup ---
+        # 1. TMDB Lookup
         find_url = f"https://api.themoviedb.org/3/find/{imdb_id}?api_key={TMDB_API_KEY}&external_source=imdb_id"
         status, body = _request(find_url)
         
@@ -103,7 +139,7 @@ def get_streams(media_type, media_id, config=None):
         if not tmdb_id or not title:
             return return_error("Media found, but TMDB returned no title or ID.")
             
-        # --- 2. HDGhar Dynamic Search ---
+        # 2. HDGhar Dynamic Search
         hosts = get_dynamic_hosts()
         search_data = None
         working_host = None
@@ -142,19 +178,12 @@ def get_streams(media_type, media_id, config=None):
         if not target_item:
             return return_error(f"Media searched successfully on {working_host}, but no matching TMDB ID found.")
             
-        # Extract possible ID parameters (some APIs use '_id', some use 'url' or 'slug')
-        target_id = target_item.get("_id")
-        target_url = target_item.get("url")
-        target_slug = target_item.get("slug")
-        
-        # Build an array of valid IDs to test against the endpoints
-        candidates = [c for c in [target_id, target_url, target_slug] if c]
+        candidates = [c for c in [target_item.get("_id"), target_item.get("url"), target_item.get("slug")] if c]
             
-        # --- 3. Multi-Path Details Fetch ---
+        # 3. Multi-Path Details Fetch
         paths_to_try = []
         if media_type == "movie":
             for c in candidates:
-                # The crucial /public/ endpoint extracted from the obfuscated JS
                 paths_to_try.extend([f"/api/movies/public/{c}", f"/api/movie/public/{c}", f"/api/movies/{c}"])
         else:
             for c in candidates:
@@ -177,7 +206,7 @@ def get_streams(media_type, media_id, config=None):
         if not detail_data:
             return return_error(f"Details API 404: Tried {paths_to_try[:3]} and all failed.")
             
-        # --- 4. Extract Streaming Links ---
+        # 4. Extract Streaming Links
         streaming_links = []
         if media_type == "movie":
             streaming_links = detail_data.get("streamingLinks", [])
@@ -195,47 +224,46 @@ def get_streams(media_type, media_id, config=None):
         if not streaming_links:
             return return_error(f"Scraped {working_detail_url}, but no streaming URLs found.")
             
-        # --- 5. Format Output ---
-        streams = []
+        # 5. Format Output & Attach Badges
+        raw_streams = []
         for link in streaming_links:
             url = link.get("url")
             if not url:
                 continue
                 
             link_name = link.get("name", "")
-            quality = "HD"
-            if "2160p" in link_name.lower() or "4k" in link_name.lower():
-                quality = "4K 2160p"
-            elif "1080p" in link_name.lower():
-                quality = "1080p"
-            elif "720p" in link_name.lower():
-                quality = "720p"
+            quality, audio, rank = parse_stream_info(link)
+            
+            # Displays quality right on the primary stream button tag!
+            stream_name = f"{TITLE} [{quality}]"
+            
+            # Formats detail line
+            stream_title = f"🎬 {quality} | 🔊 {audio}"
+            if link_name:
+                stream_title += f"\n📄 {link_name}"
                 
-            audio = ""
-            if "dual" in link_name.lower() or "multi" in link_name.lower():
-                audio = "Dual-Audio"
-            elif "hindi" in link_name.lower() or "hin" in link_name.lower():
-                audio = "Hindi"
-                
-            stream_title = f"{quality} {audio} - {link_name}".strip()
-                
-            streams.append({
-                "name": TITLE,
-                "title": stream_title,
-                "url": url,
-                "behaviorHints": {
-                    "notMyMetadata": True,
-                    "proxyHeaders": {
-                        "request": {
-                            "User-Agent": USER_AGENT,
-                            "Referer": working_host + "/",
-                            "Origin": working_host
+            raw_streams.append({
+                "rank": rank,
+                "stream": {
+                    "name": stream_name,
+                    "title": stream_title,
+                    "url": url,
+                    "behaviorHints": {
+                        "notMyMetadata": True,
+                        "proxyHeaders": {
+                            "request": {
+                                "User-Agent": USER_AGENT,
+                                "Referer": working_host + "/",
+                                "Origin": working_host
+                            }
                         }
                     }
                 }
             })
             
-        return streams
+        # Sort streams so 4K / 1080p appear at the top
+        raw_streams.sort(key=lambda x: x["rank"], reverse=True)
+        return [item["stream"] for item in raw_streams]
 
     except Exception as e:
         return return_error(f"Fatal Python Crash: {str(e)} | {traceback.format_exc()[:100]}")
