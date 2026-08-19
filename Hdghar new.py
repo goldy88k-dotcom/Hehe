@@ -8,8 +8,9 @@ VERSION = "2.0.3"
 DESCRIPTION = "Dynamic domain scraper for HDGhar with resolution badges"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
 
-# Your personal TMDB Key
-TMDB_API_KEY = "b78ae12f6a9ed6fb82f78f12207a29a9"
+# Public Nuvio TMDB Key (From Cineby)
+TMDB_API_KEY = "1865f43a0549ca50d341dd9ab8b29f49"
+
 
 def return_error(msg):
     return [{
