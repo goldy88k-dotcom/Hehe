@@ -1,5 +1,5 @@
 """
-MegaSource Scraper for PlayIMDb
+MegaSource Scraper for PlayIMDb (v1.0.2)
 Converts PlayIMDb Nuvio provider (streamdata.vaplayer.ru) to Python for MegaSource
 """
 import json
@@ -8,13 +8,12 @@ import urllib.request
 import traceback
 
 TITLE = "PlayIMDb"
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 DESCRIPTION = "High-Speed Direct Streaming via VAPlayer API"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
 BASE_API = "https://streamdata.vaplayer.ru/api.php"
 
-# Required headers for VAPlayer authorization
 HEADERS = {
     "User-Agent": USER_AGENT,
     "Origin": "https://nextgencloudfabric.com",
@@ -94,16 +93,16 @@ def get_streams(media_type, media_id, config=None):
 
         api_type = "tv" if media_type == "series" else "movie"
         
-        # 1. Fetch Stream Payload (Directly using IMDb ID)
-        api_url = f"{BASE_API}?imdb={imdb_id}&type={api_type}"
+        # 1. Fetch Stream Payload
+        api_url = f"{BASE_API}?id={imdb_id}&type={api_type}"
         if media_type == "series" and season and episode:
             api_url += f"&season={season}&episode={episode}"
 
         status, body = _request(api_url, headers=HEADERS)
         
-        # Fallback to ?id= parameter if ?imdb= fails
+        # Fallback to ?imdb= parameter if ?id= returns 404
         if status == 404:
-            api_url_fallback = f"{BASE_API}?id={imdb_id}&type={api_type}"
+            api_url_fallback = f"{BASE_API}?imdb={imdb_id}&type={api_type}"
             if media_type == "series" and season and episode:
                 api_url_fallback += f"&season={season}&episode={episode}"
             status, body = _request(api_url_fallback, headers=HEADERS)
@@ -116,16 +115,12 @@ def get_streams(media_type, media_id, config=None):
         except Exception:
             return return_error("Failed to parse VAPlayer JSON response.")
 
-        # 2. Check API Status
-        status_code = payload.get("status_code")
-        status_text = str(payload.get("status", "")).lower()
-        if status_code != 200 and status_code != 0xc8 and status_text != "success":
-            return return_error(f"VAPlayer API returned non-success: {status_code}")
+        # 2. Extract Data Object
+        data_obj = payload.get("data", {}) if isinstance(payload, dict) else {}
+        stream_urls = data_obj.get("stream_urls", []) if isinstance(data_obj, dict) else []
 
-        data_obj = payload.get("data", {})
-        stream_urls = data_obj.get("stream_urls", [])
         if not stream_urls:
-            return return_error("No stream URLs found in PlayIMDb response.")
+            return return_error("VAPlayer API connected, but no stream URLs were found for this title.")
 
         file_name = data_obj.get("file_name", "")
         quality, badge, audio, rank = parse_metadata(file_name)
@@ -159,7 +154,9 @@ def get_streams(media_type, media_id, config=None):
                         "request": {
                             "User-Agent": USER_AGENT,
                             "Referer": "https://nextgencloudfabric.com/",
-                            "Origin": "https://nextgencloudfabric.com/"
+                            "Origin": "https://nextgencloudfabric.com/",
+                            "Accept": "*/*",
+                            "Accept-Language": "en-US,en;q=0.9"
                         }
                     }
                 }
