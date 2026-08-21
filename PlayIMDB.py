@@ -8,21 +8,19 @@ import urllib.request
 import traceback
 
 TITLE = "PlayIMDb"
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 DESCRIPTION = "High-Speed Direct Streaming via VAPlayer API"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
-# Using the public Nuvio TMDB API Key
-TMDB_API_KEY = "1865f43a0549ca50d341dd9ab8b29f49"
 BASE_API = "https://streamdata.vaplayer.ru/api.php"
 
+# Required headers for VAPlayer authorization
 HEADERS = {
     "User-Agent": USER_AGENT,
     "Origin": "https://nextgencloudfabric.com",
-    "Referer": "https://nextgencloudfabric.com/"
+    "Referer": "https://nextgencloudfabric.com/",
+    "Accept": "application/json, text/plain, */*"
 }
-
-# --- Error Handling Helper ---
 
 def return_error(msg):
     """Returns an error stream visible inside Stremio."""
@@ -35,8 +33,6 @@ def return_error(msg):
             "proxyHeaders": {"request": {}}
         }
     }]
-
-# --- HTTP Request Utility ---
 
 def _request(url, headers=None):
     req_headers = {"User-Agent": USER_AGENT}
@@ -51,35 +47,10 @@ def _request(url, headers=None):
     except Exception as e:
         return 0, str(e)
 
-# --- TMDB Metadata Lookup ---
-
-def get_tmdb_id(imdb_id, media_type):
-    """Converts IMDB ID (tt...) to TMDB ID."""
-    if not str(imdb_id).startswith("tt"):
-        return imdb_id
-
-    find_url = f"https://api.themoviedb.org/3/find/{imdb_id}?api_key={TMDB_API_KEY}&external_source=imdb_id"
-    status, body = _request(find_url)
-    if status != 200 or not body:
-        return None
-
-    try:
-        data = json.loads(body)
-        results = data.get("tv_results") if media_type == "series" else data.get("movie_results")
-        if results and len(results) > 0:
-            return results[0].get("id")
-    except Exception:
-        pass
-
-    return None
-
-# --- Quality & Audio Parsing ---
-
 def parse_metadata(file_name):
     """Parses file_name string to determine resolution and audio track."""
     fn = str(file_name).lower()
 
-    # Resolution
     if "4k" in fn or "2160p" in fn or "uhd" in fn:
         quality = "4K UHD"
         badge = "4K"
@@ -97,7 +68,6 @@ def parse_metadata(file_name):
         badge = "SD"
         rank = 1
 
-    # Audio
     if "dual" in fn:
         audio = "Dual-Audio"
     elif "multi" in fn:
@@ -111,8 +81,6 @@ def parse_metadata(file_name):
 
     return quality, badge, audio, rank
 
-# --- Main Entry Point ---
-
 def get_streams(media_type, media_id, config=None):
     try:
         imdb_id = media_id
@@ -124,32 +92,35 @@ def get_streams(media_type, media_id, config=None):
                 season = parts[1]
                 episode = parts[2]
 
-        # 1. Convert IMDB ID -> TMDB ID
-        tmdb_id = get_tmdb_id(imdb_id, media_type)
-        if not tmdb_id:
-            return return_error(f"Could not resolve TMDB ID for {imdb_id}")
-
-        # 2. Build PlayIMDb VAPlayer API URL
         api_type = "tv" if media_type == "series" else "movie"
-        api_url = f"{BASE_API}?id={tmdb_id}&type={api_type}"
+        
+        # 1. Fetch Stream Payload (Directly using IMDb ID)
+        api_url = f"{BASE_API}?imdb={imdb_id}&type={api_type}"
         if media_type == "series" and season and episode:
             api_url += f"&season={season}&episode={episode}"
 
-        # 3. Fetch Stream Payload
         status, body = _request(api_url, headers=HEADERS)
+        
+        # Fallback to ?id= parameter if ?imdb= fails
+        if status == 404:
+            api_url_fallback = f"{BASE_API}?id={imdb_id}&type={api_type}"
+            if media_type == "series" and season and episode:
+                api_url_fallback += f"&season={season}&episode={episode}"
+            status, body = _request(api_url_fallback, headers=HEADERS)
+
         if status != 200 or not body:
-            return return_error(f"VAPlayer API Error: HTTP {status}")
+            return return_error(f"VAPlayer API Error: HTTP {status} for {imdb_id}")
 
         try:
             payload = json.loads(body)
         except Exception:
             return return_error("Failed to parse VAPlayer JSON response.")
 
-        # Check API status code (200 or 0xc8)
+        # 2. Check API Status
         status_code = payload.get("status_code")
         status_text = str(payload.get("status", "")).lower()
         if status_code != 200 and status_code != 0xc8 and status_text != "success":
-            return return_error(f"VAPlayer API returned non-success status: {status_code}")
+            return return_error(f"VAPlayer API returned non-success: {status_code}")
 
         data_obj = payload.get("data", {})
         stream_urls = data_obj.get("stream_urls", [])
@@ -159,7 +130,7 @@ def get_streams(media_type, media_id, config=None):
         file_name = data_obj.get("file_name", "")
         quality, badge, audio, rank = parse_metadata(file_name)
 
-        # 4. Format Subtitles (if present)
+        # 3. Format Subtitles
         subtitles = []
         raw_subs = payload.get("default_subs", [])
         if isinstance(raw_subs, list):
@@ -172,7 +143,7 @@ def get_streams(media_type, media_id, config=None):
                         "lang": sub.get("lang", "Subtitle")
                     })
 
-        # 5. Format Streams for Stremio
+        # 4. Build MegaSource Streams
         raw_results = []
         for index, stream_url in enumerate(stream_urls):
             server_name = f"Server {index + 1}"
@@ -188,9 +159,7 @@ def get_streams(media_type, media_id, config=None):
                         "request": {
                             "User-Agent": USER_AGENT,
                             "Referer": "https://nextgencloudfabric.com/",
-                            "Origin": "https://nextgencloudfabric.com/",
-                            "Accept": "*/*",
-                            "Accept-Language": "en-US,en;q=0.9"
+                            "Origin": "https://nextgencloudfabric.com/"
                         }
                     }
                 }
